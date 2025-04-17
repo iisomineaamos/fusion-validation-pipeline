@@ -1,13 +1,10 @@
-# fusion-validation-pipeline
-=======
 Long-Read Fusion Validation Pipeline
 A modular R-based pipeline for validating gene fusions in long-read RNA-seq datasets using supplementary alignments, split-reads, soft-clipped re-alignment, and full-length fusion spanning detection.
 [Flowchart diagram placeholder]
 
 📂 Overview
 This pipeline performs multi-stage validation of gene fusions detected in long-read RNA sequencing data using BAM files and a master fusion list. It uses samtools, minimap2, and R packages such as tidyverse, optparse, and IRanges.
-
-Validation Stages
+🧪 Validation Stages
 1. Supplementary Alignment Detection – Find supporting alignments flagged as supplementary near fusion breakpoints.
 2. Split-Read Detection – Detect reads with parts mapped to both 5′ and 3′ fusion regions.
 3. Soft-Clip Re-alignment – Re-align soft-clipped reads across fusion breakpoints using minimap2.
@@ -32,6 +29,7 @@ fusion-validation/
 │   ├── full_length_fusion_reads.tsv
 ├── environment.yml
 └── README.md
+
 
 Setup
 Install conda environment:
