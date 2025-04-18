@@ -77,3 +77,5 @@ Requirements
 - minimap2
 - R ≥ 4.1
 - Packages: tidyverse, optparse, IRanges
+=======
+# fusion-validation-pipeline

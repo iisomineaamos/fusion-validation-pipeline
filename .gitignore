@@ -56,3 +56,4 @@ test_data/*.bai
 !test_data/filtered_SGNex_Hct116_directRNA_replicate1_run1.sorted.bam.bai
 !test_data/filtered_SGNex_Hct116_directRNA_replicate1_run1.sorted.bam
 .venv/
+=======
