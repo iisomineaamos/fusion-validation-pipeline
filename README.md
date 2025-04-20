@@ -8,10 +8,13 @@ A modular R-based pipeline for validating gene fusions in long-read RNA-seq data
 This pipeline performs multi-stage validation of gene fusions detected in long-read RNA sequencing data using BAM files and a master fusion list. It uses samtools, minimap2, and R packages such as tidyverse, optparse, and IRanges.
 
 Validation Stages
-1. Supplementary Alignment Detection – Find supporting alignments flagged as supplementary near fusion breakpoints.
-2. Split-Read Detection – Detect reads with parts mapped to both 5′ and 3′ fusion regions.
-3. Soft-Clip Re-alignment – Re-align soft-clipped reads across fusion breakpoints using minimap2.
-4. Full-Length Fusion Span Detection – Identify long reads that span both fusion partners completely.
+1. Supplementary Alignment Detection: Find supporting alignments flagged as supplementary near fusion breakpoints.
+2. Split-Read Detection: Detect reads with parts mapped to both 5′ and 3′ fusion regions.
+3. Soft-Clipped Read Extraction (New):
+Extracts reads with soft clips (S in CIGAR) near fusion breakpoints
+Generates FASTA file from clipped portion
+3. Soft-Clip Re-alignment: Re-align soft-clipped reads across fusion breakpoints using minimap2.
+4. Full-Length Fusion Span Detection: Identify long reads that span both fusion partners completely.
 
 📁 Folder Structure
 
@@ -39,22 +42,21 @@ conda env create -f environment.yml
 conda activate fusion-validation
 
 Usage
-1. Run Supplementary Alignment Detection
-Rscript scripts/stage1_supplementary_alignments.R \
-  --input_file test_data/fusion_master.tsv \
-  --ref_genome Homo_sapiens.GRCh38.dna.primary_assembly.fa
-2. Detect Split-Read Support
-Rscript scripts/stage2_split_reads.R \
-  --supp_file output/supplementary_alignments.tsv
-3. Realign Soft-Clipped Reads
-Rscript scripts/stage3_softclip_realignment.R \
-  --softclip_file output/split_read_support.tsv \
-  --ref_genome Homo_sapiens.GRCh38.dna.primary_assembly.fa
-4. Detect Full-Length Spanning Reads
-Rscript scripts/stage4_fullspan_reads.R \
-  --input_file test_data/fusion_master.tsv \
-  --bam_file test_data/A549.bam \
-  --mapq_cutoff 20
+# Run all stages
+Rscript scripts/fusion_validation_longread_advanced.R \
+  -i test_data/fusion_input.tsv \
+  -r reference/hg38.fa
+
+# Run only Stage 3a (Soft-clip extraction)
+Rscript scripts/fusion_validation_longread_advanced.R \
+  -i test_data/fusion_input.tsv \
+  --run_stage stage3a
+
+# Run only Stage 3b (Soft-clip re-alignment)
+Rscript scripts/fusion_validation_longread_advanced.R \
+  -i test_data/fusion_input.tsv \
+  -r reference/hg38.fa \
+  --run_stage stage3b
 
 Features
 - Long-read specific enhancements

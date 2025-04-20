@@ -85,8 +85,65 @@ if (run_stage %in% c("all", "stage2")) {
   print("✅ Stage 2 complete.")
 }
 
+
 # ================================
-# Stage 3: Softclip Re-alignment
+# Stage 3a: Soft-Clipped Read Extraction
+# ================================
+if (run_stage %in% c("all", "stage3a")) {
+  print("🔍 Stage 3a: Extracting soft-clipped reads...")
+
+  softclip_window <- 1000
+  softclip_reads <- list()
+
+  for (i in 1:nrow(fusion_input)) {
+    fusion <- fusion_input[i, ]
+    fusion_id <- fusion$fusion_id
+    sample_bam <- ifelse(bam_override != "", bam_override, fusion$path)
+
+    if (!file.exists(sample_bam)) next
+
+    region5 <- paste0(fusion$fiveprime_chr, ":", fusion$fiveprime_search_start - softclip_window, "-", fusion$fiveprime_search_end + softclip_window)
+    region3 <- paste0(fusion$threeprime_chr, ":", fusion$threeprime_search_start - softclip_window, "-", fusion$threeprime_search_end + softclip_window)
+
+    cmd5 <- paste0("samtools view -F 2048 -q ", mapq_cutoff, " ", sample_bam, " ", region5)
+    cmd3 <- paste0("samtools view -F 2048 -q ", mapq_cutoff, " ", sample_bam, " ", region3)
+
+    reads5 <- system(cmd5, intern = TRUE)
+    reads3 <- system(cmd3, intern = TRUE)
+
+    extract_softclip <- function(reads) {
+      parsed <- strsplit(reads, "	")
+      tibble(
+        QNAME = sapply(parsed, `[[`, 1),
+        CIGAR = sapply(parsed, `[[`, 6),
+        SEQ = sapply(parsed, `[[`, 10)
+      ) %>%
+      filter(grepl("^[0-9]+S", CIGAR) | grepl("[0-9]+S$", CIGAR)) %>%
+      transmute(QNAME, softclip_seq = SEQ)
+    }
+
+    sc5 <- extract_softclip(reads5)
+    sc3 <- extract_softclip(reads3)
+
+    combined <- bind_rows(sc5, sc3)
+    combined <- distinct(combined)
+
+    if (nrow(combined) > 0) {
+      softclip_reads[[length(softclip_reads) + 1]] <- combined
+    }
+  }
+
+  if (length(softclip_reads) > 0) {
+    final_softclips <- bind_rows(softclip_reads)
+    write_tsv(final_softclips, "output/softclipped_reads_longread.tsv")
+    print("✅ Stage 3a complete: Soft-clipped reads extracted.")
+  } else {
+    print("⚠️ No soft-clipped reads found in regions.")
+  }
+}
+
+# ================================
+# Stage 3b: Softclip Re-alignment
 # ================================
 if (run_stage %in% c("all", "stage3")) {
   print("🔍 Stage 3: Re-aligning soft-clipped reads...")
