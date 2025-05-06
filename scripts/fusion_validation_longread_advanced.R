@@ -132,32 +132,45 @@ print("🔍 Stage 3a: Extracting soft-clipped reads...")
 
 bam_file <- if (bam_override != "") bam_override else fusion_input$path[1]
 
-# ---- Define window regions ----
+# --- Define window regions ---
 fusion_regions <- fusion_input %>%
   mutate(
-    region_5p = paste0(fiveprime_chr, ":", fiveprime_search_start - window, "-", fiveprime_search_end + window),
-    region_3p = paste0(threeprime_chr, ":", threeprime_search_start - window, "-", threeprime_search_end + window)
+    region_5p = paste0(fiveprime_chr, ":", pmax(1, fiveprime_search_start - window), "-", fiveprime_search_end + window),
+    region_3p = paste0(threeprime_chr, ":", pmax(1, threeprime_search_start - window), "-", threeprime_search_end + window)
   ) %>%
   pivot_longer(cols = c(region_5p, region_3p), names_to = "region_type", values_to = "region")
 
-# ---- Extract soft-clipped reads ----
+# --- Extract SAM lines using samtools ---
 softclip_results <- fusion_regions %>%
   mutate(cmd = paste0("samtools view ", bam_file, " ", region)) %>%
-  mutate(output = map(cmd, ~system2("bash", c("-c", .x), stdout = TRUE))) %>%
+  mutate(output = map(cmd, function(x) {
+    out <- tryCatch(system2("bash", c("-c", x), stdout = TRUE, stderr = TRUE), error = function(e) NA)
+    if (length(out) == 1 && is.na(out)) {
+      message("⚠️ Failed: ", x)
+    } else if (length(out) == 0) {
+      message("⚠️ No reads: ", x)
+    }
+    out
+  })) %>%
   select(fusion_id, region_type, region, output) %>%
   unnest(output)
 
+# --- Check if any reads returned ---
 if (nrow(softclip_results) == 0) {
   message("⚠️ No soft-clipped reads found in regions.")
 } else {
-  # ---- Parse SAM fields ----
+  # --- Parse SAM fields and filter soft-clips ---
   softclip_results <- softclip_results %>%
-    separate(output, into = c("QNAME", "FLAG", "RNAME", "POS", "MAPQ", "CIGAR", "MRNM", "MPOS", "ISIZE", "SEQ", "QUAL"), sep = "\t", extra = "merge") %>%
-    filter(str_detect(CIGAR, "S"))  # Keep only reads with soft-clipping
+    separate(output, into = c("QNAME", "FLAG", "RNAME", "POS", "MAPQ", "CIGAR", "MRNM", "MPOS", "ISIZE", "SEQ", "QUAL"), sep = "\t", extra = "merge", fill = "right") %>%
+    filter(str_detect(CIGAR, "S"))
 
-  softclip_output <- paste0("output/", output_prefix, "_softclipped_reads_longread.tsv")
-  write_tsv(softclip_results, softclip_output)
-  print(paste("✅ Stage 3a complete. Output:", softclip_output))
+  if (nrow(softclip_results) == 0) {
+    message("⚠️ Reads found, but none are soft-clipped.")
+  } else {
+    softclip_output <- paste0("output/", output_prefix, "_softclipped_reads_longread.tsv")
+    write_tsv(softclip_results, softclip_output)
+    print(paste("✅ Stage 3a complete. Output:", softclip_output))
+  }
 }
 
 # ================================
