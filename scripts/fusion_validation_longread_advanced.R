@@ -132,6 +132,18 @@ print("🔍 Stage 3a: Extracting soft-clipped reads...")
 
 bam_file <- if (bam_override != "") bam_override else fusion_input$path[1]
 
+# --- Extract chromosome lengths from BAM header ---
+bam_header <- system(paste("samtools view -H", bam_file, "| grep '^@SQ'"), intern = TRUE)
+
+chr_info <- do.call(rbind, lapply(bam_header, function(line) {
+  parts <- unlist(strsplit(line, "\t"))
+  chr <- sub("SN:", "", parts[2])
+  len <- as.numeric(sub("LN:", "", parts[3]))
+  return(data.frame(chr = chr, len = len))
+}))
+
+chr_lengths <- setNames(chr_info$len, chr_info$chr)  # Named vector: chr -> length
+
 # --- Define window regions ---
 fusion_regions <- fusion_input %>%
   mutate(
