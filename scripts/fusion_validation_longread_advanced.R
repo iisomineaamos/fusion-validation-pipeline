@@ -130,7 +130,17 @@ message("✅ Stage 2 complete.")
 # ================================
 print("🔍 Stage 3a: Extracting soft-clipped reads...")
 
+# Check if BAM file exists and is indexed
 bam_file <- if (bam_override != "") bam_override else fusion_input$path[1]
+if (!file.exists(bam_file)) {
+  stop("❌ BAM file not found: ", bam_file)
+}
+
+# Check/create BAM index
+if (!file.exists(paste0(bam_file, ".bai"))) {
+  message("⏳ Indexing BAM file...")
+  system(paste("samtools index", bam_file))
+}
 
 # --- Extract chromosome lengths from BAM header ---
 bam_header <- system(paste("samtools view -H", bam_file, "| grep '^@SQ'"), intern = TRUE)
@@ -166,39 +176,73 @@ fusion_regions <- fusion_input %>%
                names_to = "region_type", values_to = "region") %>%
   filter(!is.na(region))  # Drop regions with invalid chromosomes
 
-# --- Extract SAM lines using samtools ---
+message("ℹ Searching in ", nrow(fusion_regions), " regions for soft-clipped reads")
+
+# --- Extract SAM lines using samtools with robust error handling ---
 softclip_results <- fusion_regions %>%
-  mutate(cmd = paste0("samtools view ", bam_file, " ", region)) %>%
+  mutate(cmd = paste("samtools view", bam_file, region, "2>&1")) %>%
   mutate(output = map(cmd, function(x) {
-    out <- tryCatch(system2("bash", c("-c", x), stdout = TRUE, stderr = TRUE), error = function(e) NA)
-    if (length(out) == 1 && is.na(out)) {
-      message("⚠️ Failed: ", x)
-    } else if (length(out) == 0) {
-      message("⚠️ No reads: ", x)
-    }
+    message("  Processing: ", x)
+    out <- tryCatch({
+      result <- system(x, intern = TRUE, ignore.stderr = FALSE)
+      
+      # Check for samtools errors
+      if (any(grepl("error|failed|invalid", result, ignore.case = TRUE))) {
+        message("⚠️ Samtools error in region: ", x)
+        message(paste(head(result, 3), collapse = "\n"))
+        return(NA)
+      }
+      
+      # Return results if we have any
+      if (length(result) > 0) result else NA
+    }, error = function(e) {
+      message("⚠️ Command failed: ", x)
+      message("Error: ", e$message)
+      return(NA)
+    })
     out
   })) %>%
+  filter(!is.na(output)) %>%  # Remove failed regions
   select(fusion_id, region_type, region, output) %>%
   unnest(output)
 
 # --- Check if any reads returned ---
 if (nrow(softclip_results) == 0) {
-  message("⚠️ No soft-clipped reads found in regions.")
+  message("⚠️ No reads found in any regions.")
 } else {
+  message("ℹ Found ", nrow(softclip_results), " reads before soft-clip filtering")
+  
   # --- Parse SAM fields and filter soft-clips ---
   softclip_results <- softclip_results %>%
-    separate(output, into = c("QNAME", "FLAG", "RNAME", "POS", "MAPQ", "CIGAR", "MRNM", "MPOS", "ISIZE", "SEQ", "QUAL"), sep = "\t", extra = "merge", fill = "right") %>%
-    filter(str_detect(CIGAR, "S"))
-
+    separate(output, into = c("QNAME", "FLAG", "RNAME", "POS", "MAPQ", "CIGAR", "MRNM", "MPOS", "ISIZE", "SEQ", "QUAL"), 
+             sep = "\t", extra = "merge", fill = "right") %>%
+    mutate(
+      # Parse CIGAR for detailed soft-clip info
+      left_softclip = as.numeric(str_extract(CIGAR, "^(\\d+)S")),
+      right_softclip = as.numeric(str_extract(CIGAR, "(\\d+)S$")),
+      total_softclip = coalesce(left_softclip, 0) + coalesce(right_softclip, 0),
+      has_softclip = str_detect(CIGAR, "S")
+    )
+  
+  # Debug output
+  message("ℹ CIGAR string examples:")
+  print(head(softclip_results$CIGAR, 5))
+  message("ℹ Soft-clip summary:")
+  print(table(softclip_results$has_softclip))
+  
+  # Filter for significant soft-clipping (≥20bp)
+  softclip_results <- softclip_results %>%
+    filter(has_softclip, total_softclip >= 10)
+  
   if (nrow(softclip_results) == 0) {
-    message("⚠️ Reads found, but none are soft-clipped.")
+    message("⚠️ Reads found, but none with significant soft-clipping (≥20bp).")
   } else {
     softclip_output <- paste0("output/", output_prefix, "_softclipped_reads_longread.tsv")
     write_tsv(softclip_results, softclip_output)
-    print(paste("✅ Stage 3a complete. Output:", softclip_output))
+    print(paste("✅ Stage 3a complete. Found", nrow(softclip_results), 
+                "soft-clipped reads. Output:", softclip_output))
   }
 }
-
 # ================================
 # Stage 3b: Realignment of Soft-Clipped Reads
 # ================================
