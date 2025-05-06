@@ -144,13 +144,27 @@ chr_info <- do.call(rbind, lapply(bam_header, function(line) {
 
 chr_lengths <- setNames(chr_info$len, chr_info$chr)  # Named vector: chr -> length
 
-# --- Define window regions ---
+# --- Define window regions with safe bounds ---
 fusion_regions <- fusion_input %>%
+  rowwise() %>%
   mutate(
-    region_5p = paste0(fiveprime_chr, ":", pmax(1, fiveprime_search_start - window), "-", fiveprime_search_end + window),
-    region_3p = paste0(threeprime_chr, ":", pmax(1, threeprime_search_start - window), "-", threeprime_search_end + window)
+    region_5p_chr = fiveprime_chr,
+    region_5p_start = max(1, fiveprime_search_start - window),
+    region_5p_end = min(chr_lengths[[fiveprime_chr]], fiveprime_search_end + window),
+    region_3p_chr = threeprime_chr,
+    region_3p_start = max(1, threeprime_search_start - window),
+    region_3p_end = min(chr_lengths[[threeprime_chr]], threeprime_search_end + window)
   ) %>%
-  pivot_longer(cols = c(region_5p, region_3p), names_to = "region_type", values_to = "region")
+  ungroup() %>%
+  mutate(
+    region_5p = ifelse(!is.na(chr_lengths[region_5p_chr]),
+                       paste0(region_5p_chr, ":", region_5p_start, "-", region_5p_end), NA),
+    region_3p = ifelse(!is.na(chr_lengths[region_3p_chr]),
+                       paste0(region_3p_chr, ":", region_3p_start, "-", region_3p_end), NA)
+  ) %>%
+  pivot_longer(cols = c(region_5p, region_3p),
+               names_to = "region_type", values_to = "region") %>%
+  filter(!is.na(region))  # Drop regions with invalid chromosomes
 
 # --- Extract SAM lines using samtools ---
 softclip_results <- fusion_regions %>%
