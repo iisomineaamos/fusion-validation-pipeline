@@ -5,6 +5,13 @@
 library(tidyverse)
 library(optparse)
 library(stringr)
+library(glue)
+library(tibble)
+library(readr)
+library(dplyr)
+library(tidyr)
+library(purrr)
+library(stringr)
 
 # ---- CLI arguments ----
 # Define options
@@ -129,178 +136,119 @@ write_tsv(supp_hits, file.path("output", paste0(tools::file_path_sans_ext(basena
 message("✅ Stage 2 complete.")
 
 # ================================
-# Stage 3a: Soft-Clipped Read Extraction
+# Stage 3a: Soft-Clipped Read Extraction (New)
 # ================================
-print(paste("🔍 Stage 3a: Extracting soft-clipped reads (threshold:", softclip_threshold, "bp)..."))
 
-# Check if BAM file exists and is indexed
+message(glue::glue("🔍 Stage 3a: Extracting soft-clipped reads (threshold: {softclip_threshold} bp)..."))
+
+# Ensure necessary packages are loaded
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(stringr)
+  library(readr)
+  library(purrr)
+})
+
+# Use provided BAM file or fallback
 bam_file <- if (bam_override != "") bam_override else fusion_input$path[1]
-if (!file.exists(bam_file)) {
-  stop("❌ BAM file not found: ", bam_file)
-}
 
-# Check/create BAM index
+# Check and index BAM file if needed
 if (!file.exists(paste0(bam_file, ".bai"))) {
   message("⏳ Indexing BAM file...")
-  system(paste("samtools index", bam_file))
+  system(paste("samtools index", shQuote(bam_file)))
 }
 
-# --- Extract chromosome lengths from BAM header ---
-bam_header <- system(paste("samtools view -H", bam_file, "| grep '^@SQ'"), intern = TRUE)
+# Set output paths
+softclip_output <- glue::glue("output/{output_prefix}_softclipped_reads_{softclip_threshold}bp.tsv")
+softclip_fastq <- glue::glue("output/{output_prefix}_softclipped_reads_{softclip_threshold}bp.fastq")
 
-chr_info <- do.call(rbind, lapply(bam_header, function(line) {
-  parts <- unlist(strsplit(line, "\t"))
-  chr <- sub("SN:", "", parts[2])
-  len <- as.numeric(sub("LN:", "", parts[3]))
-  return(data.frame(chr = chr, len = len))
-}))
+# Run samtools view on entire chromosome(s) involved in fusion
+fusion_chrs <- unique(c(fusion_input$fiveprime_chr, fusion_input$threeprime_chr))
+regions <- paste(fusion_chrs, collapse = " ")
+cmd <- glue::glue("samtools view -F 0 {shQuote(bam_file)} {regions}")
 
-chr_lengths <- setNames(chr_info$len, chr_info$chr)
+message(glue::glue("🔍 Running: {cmd}"))
 
-# --- Define window regions with safe bounds ---
-fusion_regions <- fusion_input %>%
-  rowwise() %>%
-  mutate(
-    region_5p_chr = fiveprime_chr,
-    region_5p_start = max(1, fiveprime_search_start - window),
-    region_5p_end = min(chr_lengths[[fiveprime_chr]], fiveprime_search_end + window),
-    region_3p_chr = threeprime_chr,
-    region_3p_start = max(1, threeprime_search_start - window),
-    region_3p_end = min(chr_lengths[[threeprime_chr]], threeprime_search_end + window)
-  ) %>%
-  ungroup() %>%
-  mutate(
-    region_5p = ifelse(!is.na(chr_lengths[region_5p_chr]),
-                       paste0(region_5p_chr, ":", region_5p_start, "-", region_5p_end), NA),
-    region_3p = ifelse(!is.na(chr_lengths[region_3p_chr]),
-                       paste0(region_3p_chr, ":", region_3p_start, "-", region_3p_end), NA)
-  ) %>%
-  pivot_longer(cols = c(region_5p, region_3p),
-               names_to = "region_type", values_to = "region") %>%
-  filter(!is.na(region))
+sam_lines <- tryCatch(system(cmd, intern = TRUE), error = function(e) character())
 
-message("ℹ Searching in ", nrow(fusion_regions), " regions for soft-clipped reads (≥", softclip_threshold, "bp)")
-
-# --- Extract SAM lines using samtools ---
-softclip_results <- fusion_regions %>%
-  mutate(cmd = paste("samtools view", bam_file, region, "2>&1")) %>%
-  mutate(output = map(cmd, function(x) {
-    out <- tryCatch({
-      result <- system(x, intern = TRUE, ignore.stderr = FALSE)
-      if (any(grepl("error|failed|invalid", result, ignore.case = TRUE))) return(NA)
-      if (length(result) == 0) return(NA)
-      result
-    }, error = function(e) NA)
-    out
-  })) %>%
-  filter(!is.na(output)) %>%
-  select(fusion_id, region_type, region, output) %>%
-  unnest(output)
-
-# --- Process reads ---
-if (nrow(softclip_results) == 0) {
-  message("⚠️ No reads found in any regions.")
-} else {
-  softclip_results <- softclip_results %>%
-    separate(output, into = sam_fields, sep = "\t", extra = "merge", fill = "right") %>%
-    mutate(
-      left_softclip = as.numeric(str_extract(CIGAR, "^(\\d+)S")),
-      right_softclip = as.numeric(str_extract(CIGAR, "(\\d+)S$")),
-      total_softclip = coalesce(left_softclip, 0) + coalesce(right_softclip, 0),
-      has_softclip = total_softclip >= softclip_threshold
-    )
-  
-  message("ℹ Found ", sum(softclip_results$has_softclip), 
-          " reads with soft-clips ≥", softclip_threshold, "bp")
-
-  if (sum(softclip_results$has_softclip) == 0) {
-    message("⚠️ No reads met soft-clip threshold.")
-  } else {
-    softclip_output <- paste0("output/", output_prefix, 
-                             "_softclipped_reads_", softclip_threshold, "bp.tsv")
-    write_tsv(filter(softclip_results, has_softclip), softclip_output)
-    message("✅ Saved ", sum(softclip_results$has_softclip), 
-            " soft-clipped reads to ", softclip_output)
-  }
-}
-# Modified Final Check in Stage 3a
-if (exists("softclip_results") && 
-    nrow(softclip_results) > 0 && 
-    sum(softclip_results$has_softclip, na.rm = TRUE) > 0) {
-  
-  softclip_output <- paste0("output/", output_prefix, "_softclipped_reads_", softclip_threshold, "bp.tsv")
-  write_tsv(softclip_results %>% filter(has_softclip), softclip_output)
-  message("✅ Saved ", sum(softclip_results$has_softclip), " soft-clipped reads")
-  
-} else {
-  message("⚠️ No soft-clipped reads ≥", softclip_threshold, "bp found")
-  # Create empty file to prevent downstream errors
-  softclip_output <- paste0("output/", output_prefix, "_softclipped_reads_", softclip_threshold, "bp.tsv")
+if (length(sam_lines) == 0) {
+  message("⚠️ No reads found.")
   write_tsv(tibble(), softclip_output)
-}
-
-# ================================
-# Stage 3b: Realignment of Soft-Clipped Reads
-# ================================
-# Add this at the start
-
-print("🔍 Stage 3b: Realigning soft-clipped reads...")
-
-# Check if we have valid soft-clipped reads
-if (file.size(paste0("output/", output_prefix, "_softclipped_reads_", softclip_threshold, "bp.tsv")) == 0) {
-  message("⚠️ Skipping Stage 3b: No soft-clipped reads available")
 } else {
-  # Read the filtered soft-clipped reads
-  softclipped <- read_tsv(paste0("output/", output_prefix, "_softclipped_reads_", softclip_threshold, "bp.tsv"),
-                         show_col_types = FALSE)
-  
-  # ---- Extract soft-clipped sequences ----
-  softclip_fasta <- paste0("output/", output_prefix, "_softclip_sequences.fa")
-  
-  # Create FASTA only from reads with valid soft-clips
-  fasta_lines <- softclipped %>%
-    filter(has_softclip) %>%
+  softclip_df <- tibble(raw = sam_lines) %>%
+    mutate(fields = str_split(raw, "\t")) %>%
+    filter(map_int(fields, length) >= 11) %>%
+    transmute(
+      QNAME = map_chr(fields, 1),
+      FLAG = map_chr(fields, 2),
+      RNAME = map_chr(fields, 3),
+      POS = as.integer(map_chr(fields, 4)),
+      MAPQ = as.integer(map_chr(fields, 5)),
+      CIGAR = map_chr(fields, 6),
+      SEQ = map_chr(fields, 10),
+      QUAL = map_chr(fields, 11)
+    ) %>%
     mutate(
-      fasta_entry = ifelse(
-        !is.na(left_softclip),
-        paste0(">", QNAME, "_left\n", str_sub(SEQ, 1, left_softclip), "\n",
-               ">", QNAME, "_right\n", str_sub(SEQ, nchar(SEQ) - right_softclip + 1, nchar(SEQ))),
-        paste0(">", QNAME, "\n", SEQ)
+      left_softclip = as.integer(str_match(CIGAR, "^(\\d+)S")[,2]),
+      right_softclip = as.integer(str_match(CIGAR, "(\\d+)S$")[,2]),
+      total_softclip = coalesce(left_softclip, 0) + coalesce(right_softclip, 0)
+    ) %>%
+    filter(total_softclip >= softclip_threshold)
+
+  message(glue::glue("✅ Found {nrow(softclip_df)} soft-clipped reads ≥{softclip_threshold}bp."))
+
+  # Save soft-clipped reads to TSV
+  write_tsv(softclip_df, softclip_output)
+  message("📁 Output saved to: ", softclip_output)
+
+  # Write the soft-clipped reads in FASTQ format
+  if (nrow(softclip_df) > 0) {
+    fastq_lines <- purrr::map_chr(1:nrow(softclip_df), function(i) {
+      # Format for FASTQ: 
+      # @QNAME
+      # SEQ
+      # +
+      # QUAL
+      paste0(
+        "@", softclip_df$QNAME[i], "\n", 
+        softclip_df$SEQ[i], "\n", 
+        "+\n", 
+        softclip_df$QUAL[i]
       )
-    ) %>%
-    pull(fasta_entry)
-  
-  writeLines(fasta_lines, softclip_fasta)
-  
-  # ---- Run minimap2 ----
-  realign_output <- paste0("output/", output_prefix, "_softclip_realignments.sam")
-  realign_cmd <- paste(minimap2, "-a -x map-ont", ref_genome, softclip_fasta, ">", realign_output)
-  system(realign_cmd)
-  
-  # ---- Parse and filter alignments ----
-  if (file.exists(realign_output) && file.size(realign_output) > 0) {
-    realigned <- read_tsv(
-      realign_output,
-      comment = "@",
-      col_names = c("QNAME", "FLAG", "RNAME", "POS", "MAPQ", "CIGAR", 
-                    "RNEXT", "PNEXT", "TLEN", "SEQ", "QUAL", "TAGS"),
-      show_col_types = FALSE,
-      na = c("", "NA", "*")
-    ) %>%
-      mutate(MAPQ = as.integer(MAPQ)) %>%
-      filter(MAPQ >= mapq_cutoff)
+    })
     
-    if (nrow(realigned) > 0) {
-      realign_output_tsv <- paste0("output/", output_prefix, "_softclip_realignments_filtered.tsv")
-      write_tsv(realigned, realign_output_tsv)
-      message("✅ Saved ", nrow(realigned), " high-quality realignments")
-    } else {
-      message("⚠️ No realignments passed MAPQ cutoff (", mapq_cutoff, ")")
-    }
+    # Write to FASTQ file
+    writeLines(fastq_lines, softclip_fastq)
+    message("📁 Soft-clipped reads saved to FASTQ format: ", softclip_fastq)
   } else {
-    message("⚠️ Realignment failed - no output generated")
+    message("⚠️ No soft-clipped reads found to write to FASTQ.")
   }
 }
+
+# ================================
+# Stage 3b: Realign Soft-Clipped Reads
+# ================================
+message("🔍 Stage 3b: Realigning soft-clipped reads...")
+
+# Ensure that the softclip_fastq is available and not empty
+if (file.exists(softclip_fastq) && file.info(softclip_fastq)$size > 0) {
+  
+  # Define the output for the realigned reads
+  realign_output <- glue("output/{output_prefix}_softclipped_realigned.sam")
+  
+  # Command for minimap2 to align the soft-clipped reads to the reference genome
+  align_cmd <- glue("minimap2 -a {ref_genome} {softclip_fastq} > {realign_output}")
+  
+  message("⏳ Aligning soft-clipped reads with minimap2...")
+  
+  # Run the alignment command
+  system(align_cmd)
+  
+  message(glue("✅ Stage 3b complete. Output: {realign_output}"))
+} else {
+  message("⚠️ Skipping Stage 3b: No soft-clipped reads available or file is empty")
+}
+
 # ================================
 # Stage 4: Full-Length Spanning Fusion Reads
 # ================================
