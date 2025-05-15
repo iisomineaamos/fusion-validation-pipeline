@@ -136,38 +136,33 @@ write_tsv(supp_hits, file.path("output", paste0(tools::file_path_sans_ext(basena
 message("✅ Stage 2 complete.")
 
 # ================================
-# Stage 3a: Soft-Clipped Read Extraction (New)
+# Stage 3a: Soft-Clipped Read Extraction with fusion_id tagging
 # ================================
 
 message(glue::glue("🔍 Stage 3a: Extracting soft-clipped reads (threshold: {softclip_threshold} bp)..."))
 
-# Ensure necessary packages are loaded
 suppressPackageStartupMessages({
   library(dplyr)
   library(stringr)
   library(readr)
   library(purrr)
+  library(glue)
 })
 
-# Use provided BAM file or fallback
 bam_file <- if (bam_override != "") bam_override else fusion_input$path[1]
-
-# Check and index BAM file if needed
 if (!file.exists(paste0(bam_file, ".bai"))) {
   message("⏳ Indexing BAM file...")
   system(paste("samtools index", shQuote(bam_file)))
 }
 
-# Set output paths
-softclip_output <- glue::glue("output/{output_prefix}_softclipped_reads_{softclip_threshold}bp.tsv")
-softclip_fastq <- glue::glue("output/{output_prefix}_softclipped_reads_{softclip_threshold}bp.fastq")
+output_prefix <- tools::file_path_sans_ext(basename(fusion_file))
+softclip_output <- glue("output/{output_prefix}_softclipped_reads_{softclip_threshold}bp.tsv")
+softclip_fastq <- glue("output/{output_prefix}_softclipped_reads_{softclip_threshold}bp.fastq")
 
-# Run samtools view on entire chromosome(s) involved in fusion
 fusion_chrs <- unique(c(fusion_input$fiveprime_chr, fusion_input$threeprime_chr))
 regions <- paste(fusion_chrs, collapse = " ")
-cmd <- glue::glue("samtools view -F 0 {shQuote(bam_file)} {regions}")
-
-message(glue::glue("🔍 Running: {cmd}"))
+cmd <- glue("samtools view -F 0 {shQuote(bam_file)} {regions}")
+message("🔍 Running: {cmd}")
 
 sam_lines <- tryCatch(system(cmd, intern = TRUE), error = function(e) character())
 
@@ -195,33 +190,38 @@ if (length(sam_lines) == 0) {
     ) %>%
     filter(total_softclip >= softclip_threshold)
 
-  message(glue::glue("✅ Found {nrow(softclip_df)} soft-clipped reads ≥{softclip_threshold}bp."))
+# Assign fusion_id by checking overlap with fusion_input regions
+message("🔗 Assigning fusion_id based on region overlap...")
 
-  # Save soft-clipped reads to TSV
-  write_tsv(softclip_df, softclip_output)
-  message("📁 Output saved to: ", softclip_output)
+softclip_df <- softclip_df %>%
+  mutate(
+    fusion_id = map_chr(seq_along(POS), function(i) {
+      hit <- fusion_input %>%
+        filter(
+          (fiveprime_chr == RNAME[i] & POS[i] >= (fiveprime_search_start - window) & POS[i] <= (fiveprime_search_end + window)) |
+          (threeprime_chr == RNAME[i] & POS[i] >= (threeprime_search_start - window) & POS[i] <= (threeprime_search_end + window))
+        ) %>%
+        pull(fusion_id)
 
-  # Write the soft-clipped reads in FASTQ format
+      if (length(hit) == 0) NA_character_ else hit[1]
+    })
+  ) %>%
+  filter(!is.na(fusion_id))
+
+message(glue("✅ Found {nrow(softclip_df)} soft-clipped reads ≥{softclip_threshold}bp."))
+
+write_tsv(softclip_df, softclip_output)
+message("📁 Output saved to: {softclip_output}")
+
+  # Write FASTQ
   if (nrow(softclip_df) > 0) {
     fastq_lines <- purrr::map_chr(1:nrow(softclip_df), function(i) {
-      # Format for FASTQ: 
-      # @QNAME
-      # SEQ
-      # +
-      # QUAL
-      paste0(
-        "@", softclip_df$QNAME[i], "\n", 
-        softclip_df$SEQ[i], "\n", 
-        "+\n", 
-        softclip_df$QUAL[i]
-      )
+      paste0("@", softclip_df$QNAME[i], "\n", softclip_df$SEQ[i], "\n+\n", softclip_df$QUAL[i])
     })
-    
-    # Write to FASTQ file
     writeLines(fastq_lines, softclip_fastq)
     message("📁 Soft-clipped reads saved to FASTQ format: ", softclip_fastq)
   } else {
-    message("⚠️ No soft-clipped reads found to write to FASTQ.")
+    message("⚠️ No soft-clipped reads to write to FASTQ.")
   }
 }
 
@@ -297,3 +297,50 @@ if (length(fullspan_reads) > 0) {
 }
 
 print("🎉 Pipeline completed successfully!")
+
+
+# ================================
+# Stage 5: Final Fusion Validation
+# ================================
+message("🔍 Stage 5: Validating fusion events using all evidence...")
+
+# Construct paths using output_prefix
+supp_file <- file.path("output", paste0(output_prefix, "_supplementary_alignments.tsv"))
+softclip_file <- file.path("output", paste0(output_prefix, "_softclipped_reads_", softclip_threshold, "bp.tsv"))
+fullspan_file <- file.path("output", paste0(output_prefix, "_full_length_fusion_reads.tsv"))
+
+# Check existence
+required_files <- c(supp_file, softclip_file, fullspan_file)
+missing_files <- required_files[!file.exists(required_files)]
+
+if (length(missing_files) > 0) {
+  stop("❌ One or more required output files are missing:\n", paste(missing_files, collapse = "\n"))
+}
+
+# Load all outputs
+supp_df <- read_tsv(supp_file, show_col_types = FALSE)
+soft_df <- read_tsv(softclip_file, show_col_types = FALSE)
+full_df <- read_tsv(fullspan_file, show_col_types = FALSE)
+
+# If any of them are completely empty, warn and create empty frames
+if (nrow(supp_df) == 0) message("⚠️ Supplementary file is empty.")
+if (nrow(soft_df) == 0) message("⚠️ Soft-clipped file is empty.")
+if (nrow(full_df) == 0) message("⚠️ Full-span file is empty.")
+
+# Combine by fusion_id (adjust if different identifier used)
+combined_validated <- fusion_input %>%
+  mutate(
+    supplementary = fusion_id %in% supp_df$fusion_id,
+    softclipped   = fusion_id %in% soft_df$fusion_id,
+    fullspan      = fusion_id %in% full_df$fusion_id
+  ) %>%
+  mutate(
+    total_support = supplementary + softclipped + fullspan,
+    validated = total_support > 0
+  )
+
+# Save final validated fusions
+validated_output <- file.path("output", paste0(output_prefix, "_validated_fusions.tsv"))
+write_tsv(combined_validated, validated_output)
+
+message("✅ Stage 5 complete. Validated fusion output: ", validated_output)
