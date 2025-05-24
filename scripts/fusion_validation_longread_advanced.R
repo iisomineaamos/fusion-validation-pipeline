@@ -206,36 +206,58 @@ stage2_supp_output_basename <- tools::file_path_sans_ext(basename(fusions_file_f
 stage2_supp_output_path <- file.path(output_dir, paste0(stage2_supp_output_basename, "_stage2_supplementary_alignments.tsv"))
 write_tsv(supp_hits_stage2, stage2_supp_output_path)
 message(paste("✅ Stage 2 complete. Candidate supplementary alignments written to:", stage2_supp_output_path, "(", nrow(supp_hits_stage2), "records )"))
-# ================================
-# Stage 3a: Soft-Clipped Read Extraction
+
+#=================================
+# Stage 3a: Soft-Clipped Read Extraction (Modified for Chunking)
 # ================================
 message(glue("🔍 Stage 3a: Extracting soft-clipped reads (threshold: {min_softclip_len} bp)..."))
-if (!file.exists(paste0(bam_file_path, ".bai"))) {
-  message("⏳ Indexing BAM file...")
-  system_status_index_3a <- system(paste("samtools index", shQuote(bam_file_path)))
-  if(system_status_index_3a != 0) stop("BAM indexing failed in Stage 3a.", call.=FALSE)
-}
+# ... (BAM indexing code: if (!file.exists(paste0(bam_file_path, ".bai"))) { ... } ) ...
+# Ensure your BAM indexing code is here if it's not in the ellipsis above.
+
 softclip_tsv_path <- file.path(output_dir, glue("{output_prefix}_softclipped_reads_min{min_softclip_len}bp.tsv"))
-softclip_fastq_path <- file.path(output_dir, glue("{output_prefix}_softclipped_reads_min{min_softclip_len}bp.fastq"))
+# We will not write a single large FASTQ path here anymore, but will generate paths for chunks.
+# softclip_fastq_path <- file.path(output_dir, glue("{output_prefix}_softclipped_reads_min{min_softclip_len}bp.fastq"))
+
 fusion_chrs_stage3 <- unique(c(fusion_input$fiveprime_chr, fusion_input$threeprime_chr))
 if (length(fusion_chrs_stage3) > 0) {
-    regions_stage3 <- paste(shQuote(fusion_chrs_stage3), collapse = " ")
+    regions_stage3 <- paste(shQuote(fusion_chrs_stage3), collapse = " ") # Define regions_stage3
+
+    # ================================================================================
+    # THIS IS THE MISSING BLOCK TO RE-INSERT OR UNCOMMENT
+    # ================================================================================
     # Using -F 2304 for primary, non-supp, non-secondary, and min_mapq for the original read
     cmd_stage3a <- glue("samtools view -F 2304 -q {min_mapq} {shQuote(bam_file_path)} {regions_stage3}")
     message(glue("🔍 Running for Stage 3a: {cmd_stage3a}"))
     sam_lines_stage3a <- tryCatch(system(cmd_stage3a, intern = TRUE, ignore.stderr = TRUE),
                                   error = function(e) {message(paste("Error in samtools view (Stage 3a):",e$message)); character()})
+    # ================================================================================
+
+    # --- ADD THIS FOR DEBUGGING (Optional, but recommended for now) ---
+    if (exists("sam_lines_stage3a")) {
+      message(paste("DEBUG: sam_lines_stage3a object exists. Length:", length(sam_lines_stage3a)))
+      if (length(sam_lines_stage3a) > 0 && length(sam_lines_stage3a) < 10) { # Print first few lines only if not too many
+        message(paste("DEBUG: First few lines of sam_lines_stage3a:", paste(head(sam_lines_stage3a), collapse=" | ")))
+      } else if (length(sam_lines_stage3a) >= 10) {
+        message(paste("DEBUG: First line of sam_lines_stage3a:", head(sam_lines_stage3a, 1)))
+      } else {
+        message("DEBUG: sam_lines_stage3a is empty.")
+      }
+    } else {
+      message("DEBUG: sam_lines_stage3a object DOES NOT EXIST here.")
+    }
+    # --- END OF DEBUGGING BLOCK ---
 
     if (length(sam_lines_stage3a) == 0) {
       message("⚠️ No reads found by samtools in Stage 3a for soft-clip analysis, or command failed.")
-      write_tsv(tibble(), softclip_tsv_path); writeLines(character(), softclip_fastq_path)
+      write_tsv(tibble(), softclip_tsv_path) # Still write empty TSV for consistency
+      # No FASTQ files to write. Ensure Stage 3b knows this.
     } else {
       message(paste("📄 Stage 3a: Retrieved", length(sam_lines_stage3a), "records from samtools view."))
 
       softclip_df_stage3a <- tibble(raw = sam_lines_stage3a) %>%
+        # ... (the rest of your existing separate, filter, mutate chain) ...
         separate(raw, into = sam_fields_definition, sep = "\t", fill = "right", extra = "merge") %>%
-        # CRITICAL FILTER: Ensure SEQ and QUAL are valid before proceeding
-        filter(!is.na(SEQ) & SEQ != "*" & !is.na(QUAL) & QUAL != "*" & QUAL != "0" & nchar(SEQ) == nchar(QUAL)) %>%
+        filter(!is.na(SEQ) & SEQ != "*" & !is.na(QUAL) & QUAL != "*" & QUAL != "0" & nchar(SEQ) == nchar(QUAL)) %>% 
         mutate(
           POS = as.integer(POS), MAPQ = as.integer(MAPQ),
           left_softclip = as.integer(str_match(CIGAR, "^(\\d+)S")[,2]),
@@ -244,62 +266,125 @@ if (length(fusion_chrs_stage3) > 0) {
         ) %>%
         filter(total_softclip >= min_softclip_len)
       message(glue("✅ Stage 3a: Found {nrow(softclip_df_stage3a)} reads with valid SEQ/QUAL and soft-clips ≥{min_softclip_len}bp."))
-
-      # MODIFICATION: Clean the OPT (tags) column before writing to TSV
+      
       if ("OPT" %in% names(softclip_df_stage3a)) {
-        message("ℹ️ Stage 3a: Cleaning internal tabs from OPT (tags) column by replacing with semicolons.")
-        softclip_df_stage3a <- softclip_df_stage3a %>%
+        message("ℹ️ Stage 3a: Cleaning internal tabs from OPT (tags) column by replacing with semicolons for TSV.")
+        softclip_df_stage3a_for_tsv <- softclip_df_stage3a %>%
           mutate(OPT = str_replace_all(OPT, "\t", ";"))
+        write_tsv(softclip_df_stage3a_for_tsv, softclip_tsv_path)
+      } else {
+        write_tsv(softclip_df_stage3a, softclip_tsv_path)
       }
-      # END OF MODIFICATION
-
-      write_tsv(softclip_df_stage3a, softclip_tsv_path)
       message(paste("📁 Stage 3a TSV output saved to:", softclip_tsv_path))
 
+      # --- CHUNKING LOGIC FOR FASTQ ---
+      # ... (rest of your chunking logic for FASTQ remains the same) ...
       if (nrow(softclip_df_stage3a) > 0) {
-        # Original script writes the *entire read* to FASTQ if it has a soft-clip.
-        fastq_lines_stage3a <- purrr::map_chr(1:nrow(softclip_df_stage3a), function(i) {
-          paste0("@", softclip_df_stage3a$QNAME[i], "\n",
-                 softclip_df_stage3a$SEQ[i], "\n", "+\n", softclip_df_stage3a$QUAL[i])
-        })
-        writeLines(fastq_lines_stage3a, softclip_fastq_path)
-        message(paste("📁 Stage 3a FASTQ (full reads) saved to:", softclip_fastq_path))
+        reads_per_chunk <- 50000 
+        num_chunks <- ceiling(nrow(softclip_df_stage3a) / reads_per_chunk)
+        message(glue("ℹ️ Stage 3a: Splitting {nrow(softclip_df_stage3a)} reads into {num_chunks} FASTQ chunks of up to {reads_per_chunk} reads each."))
+        for (chunk_num in 1:num_chunks) {
+          start_row <- (chunk_num - 1) * reads_per_chunk + 1
+          end_row <- min(chunk_num * reads_per_chunk, nrow(softclip_df_stage3a))
+          current_chunk_df <- softclip_df_stage3a[start_row:end_row, ]
+          chunk_fastq_path <- file.path(output_dir, glue("{output_prefix}_softclipped_reads_min{min_softclip_len}bp_chunk{chunk_num}.fastq"))
+          fastq_lines_chunk <- purrr::map_chr(1:nrow(current_chunk_df), function(i) {
+            paste0("@", current_chunk_df$QNAME[i], "\n",
+                   current_chunk_df$SEQ[i], "\n", "+\n", current_chunk_df$QUAL[i])
+          })
+          writeLines(fastq_lines_chunk, chunk_fastq_path)
+          message(paste("📁 Stage 3a FASTQ chunk", chunk_num, "saved to:", chunk_fastq_path))
+        }
       } else {
         message("⚠️ No soft-clipped reads with valid SEQ/QUAL to write to FASTQ for Stage 3a.")
-        writeLines(character(), softclip_fastq_path)
       }
     }
 } else {
     message("⚠️ No chromosomes identified for Stage 3a based on fusion input.")
-    write_tsv(tibble(), softclip_tsv_path); writeLines(character(), softclip_fastq_path)
+    write_tsv(tibble(), softclip_tsv_path) 
 }
 message("✅ Stage 3a complete.")
 
 # ================================
-# Stage 3b: Realign Reads that Originally had Soft-Clips
+# Stage 3b: Realign Reads that Originally had Soft-Clips (Modified for Chunking)
 # ================================
-message("🔍 Stage 3b: Realigning full reads that originally had soft-clips...")
-realign_output_sam_path <- file.path(output_dir, glue("{output_prefix}_softclipped_reads_realigned.sam"))
-if (file.exists(softclip_fastq_path) && file.info(softclip_fastq_path)$size > 0) {
-  # Example for Oxford Nanopore reads:
-  minimap2_preset_3b <- "-ax map-ont" 
-  message(paste("ℹ️ Using minimap2 preset:", minimap2_preset_3b, "for Stage 3b realignment."))
-  # Original script: glue("minimap2 -a {ref_genome} {softclip_fastq} > {realign_output}")
-  # -a is implicit with -ax preset.
-  align_cmd_3b <- glue("{shQuote(minimap2_executable)} {minimap2_preset_3b} {shQuote(ref_genome_path)} {shQuote(softclip_fastq_path)} > {shQuote(realign_output_sam_path)}")
-  message(paste("⏳ Aligning with minimap2 (Stage 3b):", align_cmd_3b))
-  system_status_3b <- system(align_cmd_3b) 
-  if(system_status_3b == 0 && file.exists(realign_output_sam_path) && file.info(realign_output_sam_path)$size > 0){
-       message(paste("✅ Stage 3b complete. Realigned SAM output:", realign_output_sam_path))
-  } else {
-       message(paste("⚠️ Stage 3b failed or produced empty output. Minimap2 status:", system_status_3b, ". Output file:", realign_output_sam_path))
-       writeLines(character(), realign_output_sam_path) 
-  }
-} else {
-  message("⚠️ Skipping Stage 3b: No FASTQ from Stage 3a available or file is empty.")
-  writeLines(character(), realign_output_sam_path) 
-}
+message("🔍 Stage 3b: Realigning full reads that originally had soft-clips (in chunks)...")
 
+# Define the final combined SAM output path
+realign_output_sam_path <- file.path(output_dir, glue("{output_prefix}_softclipped_reads_realigned.sam")) # This is the final combined file
+
+# Find the FASTQ chunk files
+chunk_fastq_files <- list.files(path = output_dir, 
+                                pattern = glue("^{output_prefix}_softclipped_reads_min{min_softclip_len}bp_chunk\\d+\\.fastq$"), 
+                                full.names = TRUE)
+
+if (length(chunk_fastq_files) > 0) {
+  minimap2_preset_3b <- "-ax map-ont" # Or your chosen long-read preset
+  message(paste("ℹ️ Using minimap2 preset:", minimap2_preset_3b, "for Stage 3b realignment (long reads)."))
+  
+  all_chunk_sam_outputs <- c() # To store paths of individual SAM outputs
+
+  for (i in 1:length(chunk_fastq_files)) {
+    current_fastq_chunk <- chunk_fastq_files[i]
+    chunk_sam_output_path <- sub("\\.fastq$", ".sam", current_fastq_chunk) # Name SAM chunk based on FASTQ chunk
+    all_chunk_sam_outputs <- c(all_chunk_sam_outputs, chunk_sam_output_path)
+
+    message(paste("⏳ Aligning chunk", i, "/", length(chunk_fastq_files), ":", basename(current_fastq_chunk)))
+    align_cmd_3b_chunk <- glue("{shQuote(minimap2_executable)} {minimap2_preset_3b} {shQuote(ref_genome_path)} {shQuote(current_fastq_chunk)} > {shQuote(chunk_sam_output_path)}")
+    message(paste("   Running:", align_cmd_3b_chunk))
+    
+    system_status_3b_chunk <- system(align_cmd_3b_chunk)
+    
+    if(system_status_3b_chunk != 0) {
+      message(paste("⚠️ Minimap2 failed for chunk", i, "(status:", system_status_3b_chunk, "). Output file:", chunk_sam_output_path))
+      # Decide how to handle partial failure: stop, or continue and try to merge what's available?
+      # For now, let's assume we might want to merge successful ones, or just note the failure.
+      # If a chunk fails, its SAM file might be empty or incomplete.
+    } else {
+      message(paste("✅ Chunk", i, "alignment complete. Output:", chunk_sam_output_path))
+    }
+  }
+
+  # --- Combine SAM files ---
+  message("⏳ Combining individual SAM chunk outputs...")
+  first_sam_written <- FALSE
+  final_sam_con <- file(realign_output_sam_path, "w")
+
+  for (sam_file_path in all_chunk_sam_outputs) {
+    if (file.exists(sam_file_path) && file.info(sam_file_path)$size > 0) {
+      sam_lines <- readLines(sam_file_path)
+      header_lines <- sam_lines[startsWith(sam_lines, "@")]
+      alignment_lines <- sam_lines[!startsWith(sam_lines, "@")]
+      alignment_lines <- alignment_lines[alignment_lines != ""] # Remove empty lines
+
+      if (!first_sam_written && length(header_lines) > 0) {
+        writeLines(header_lines, final_sam_con)
+        first_sam_written <- TRUE
+      }
+      if (length(alignment_lines) > 0) {
+        writeLines(alignment_lines, final_sam_con)
+      }
+    } else {
+      message(paste("⚠️ Skipping empty or non-existent SAM chunk:", sam_file_path))
+    }
+  }
+  close(final_sam_con)
+
+  if (file.exists(realign_output_sam_path) && file.info(realign_output_sam_path)$size > 0) {
+    message(paste("✅ Stage 3b complete. Combined realigned SAM output:", realign_output_sam_path))
+    # Optionally, delete individual SAM chunks after successful merge
+    # for (sam_chunk in all_chunk_sam_outputs) { if(file.exists(sam_chunk)) file.remove(sam_chunk) }
+    # message("ℹ️ Individual SAM chunks deleted.")
+  } else {
+    message(paste("⚠️ Stage 3b resulted in an empty combined SAM file:", realign_output_sam_path))
+    # Ensure an empty file exists if it's expected by later stages, even if processing failed.
+    if(!file.exists(realign_output_sam_path)) writeLines(character(), realign_output_sam_path)
+  }
+
+} else {
+  message("⚠️ Skipping Stage 3b: No FASTQ chunks from Stage 3a available or files are empty.")
+  writeLines(character(), realign_output_sam_path) # Create empty SAM if no FASTQ
+}
 # ================================
 # Stage 4: Full-Length Spanning Fusion Reads (Original script's definition)
 # ================================
