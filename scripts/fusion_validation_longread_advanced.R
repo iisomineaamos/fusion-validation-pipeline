@@ -281,8 +281,8 @@ message("✅ Stage 3a complete.")
 message("🔍 Stage 3b: Realigning full reads that originally had soft-clips...")
 realign_output_sam_path <- file.path(output_dir, glue("{output_prefix}_softclipped_reads_realigned.sam"))
 if (file.exists(softclip_fastq_path) && file.info(softclip_fastq_path)$size > 0) {
-  # Using -ax sr as a default for these full reads, assuming interest in precise end-mapping.
-  minimap2_preset_3b <- "-ax sr" 
+  # Example for Oxford Nanopore reads:
+  minimap2_preset_3b <- "-ax map-ont" 
   message(paste("ℹ️ Using minimap2 preset:", minimap2_preset_3b, "for Stage 3b realignment."))
   # Original script: glue("minimap2 -a {ref_genome} {softclip_fastq} > {realign_output}")
   # -a is implicit with -ax preset.
