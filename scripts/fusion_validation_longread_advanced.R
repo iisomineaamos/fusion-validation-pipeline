@@ -441,20 +441,20 @@ final_summary_table_path_s5 <- file.path(output_dir, paste0(output_prefix, "_fus
 
 parse_sa_tag_from_sam_tags_s5 <- function(tags_string) {
   if (is.na(tags_string) || tags_string == "") return(tibble())
-  sa_tag_value <- str_extract(tags_string, "SA:Z:[^\\t;]+") 
+  sa_tag_value <- str_extract(tags_string, "SA:Z:[^\\t;]+")
   if (is.na(sa_tag_value)) return(tibble())
   sa_string_clean <- sub("^SA:Z:", "", sa_tag_value)
   alignments <- str_split(sa_string_clean, ";")[[1]]
-  alignments <- alignments[alignments != "" & !is.na(alignments)] 
+  alignments <- alignments[alignments != "" & !is.na(alignments)]
   if(length(alignments) == 0) return(tibble())
   map_dfr(alignments, function(aln) {
     parts <- str_split(aln, ",")[[1]]
-    if (length(parts) >= 6) { 
+    if (length(parts) >= 6) {
         tryCatch({
             tibble(sa_rname = parts[1], sa_pos = as.integer(parts[2]), sa_strand = parts[3],
                    sa_cigar = parts[4], sa_mapq = as.integer(parts[5]), sa_nm = as.integer(parts[6]))
-        }, error = function(e) tibble()) 
-    } else { tibble() } 
+        }, error = function(e) tibble())
+    } else { tibble() }
   })
 }
 
@@ -465,14 +465,13 @@ loaded_supp_align_evidence_s5 <- tibble()
 if (file.exists(supp_align_evidence_file_s5) && file.info(supp_align_evidence_file_s5)$size > 0) {
   loaded_supp_align_evidence_s5 <- read_tsv(supp_align_evidence_file_s5, show_col_types = FALSE,
                                          col_types = cols(MAPQ=col_integer(), POS=col_integer(), .default=col_character()))
-  print(problems(loaded_supp_align_evidence_s5))
-  # Stage 2 output (supp_hits_stage2) was already created with a "TAGS" column (renamed from OPT if necessary)
+  print(problems(loaded_supp_align_evidence_s5)) # Keep this to check for parsing issues
   if ("TAGS" %in% names(loaded_supp_align_evidence_s5)) {
     loaded_supp_align_evidence_s5 <- loaded_supp_align_evidence_s5 %>%
       mutate(SA_DETAILS_PARSED = map(TAGS, ~parse_sa_tag_from_sam_tags_s5(.x)))
   } else {
     message("⚠️ Warning: TAGS column not found in Stage 2 supplementary alignment output. SA tag parsing from this source will be limited.")
-    loaded_supp_align_evidence_s5$SA_DETAILS_PARSED <- list(tibble()) 
+    loaded_supp_align_evidence_s5$SA_DETAILS_PARSED <- list(tibble())
   }
   print(paste("Loaded and pre-parsed", nrow(loaded_supp_align_evidence_s5), "records from Stage 2 supp. align. output:", supp_align_evidence_file_s5))
 } else { print(paste("⚠️ Warning: Stage 2 supp. align. file not found/empty:", supp_align_evidence_file_s5)) }
@@ -483,12 +482,12 @@ if (file.exists(realigned_softclip_origin_sam_file_s5) && file.info(realigned_so
   realigned_sam_data_lines_s5 <- realigned_sam_lines_s5[!startsWith(realigned_sam_lines_s5, "@")]
   if(length(realigned_sam_data_lines_s5) > 0){
     loaded_realigned_sc_sam_s5 <- tibble(raw_sam = realigned_sam_data_lines_s5) %>%
-      separate(raw_sam, into = sam_fields_definition, sep = "\t", fill = "right", extra = "merge") %>% # Use sam_fields_definition
-      rename(TAGS = OPT) %>% 
+      separate(raw_sam, into = sam_fields_definition, sep = "\t", fill = "right", extra = "merge") %>%
+      rename(TAGS = OPT) %>%
       mutate(POS = as.integer(POS), MAPQ = as.integer(MAPQ), FLAG = as.integer(FLAG)) %>%
-      rename(ORIG_QNAME = QNAME) %>% # QNAME from Stage 3a FASTQ is the original QNAME
+      rename(ORIG_QNAME = QNAME) %>%
       filter(!is.na(RNAME) & RNAME != "*" & !is.na(POS) & !is.na(MAPQ) & MAPQ >= min_mapq_s5)
-    
+
     if (nrow(loaded_realigned_sc_sam_s5) > 0 && "TAGS" %in% names(loaded_realigned_sc_sam_s5)) {
         loaded_realigned_sc_sam_s5 <- loaded_realigned_sc_sam_s5 %>%
             mutate(SA_DETAILS_PARSED = map(TAGS, ~parse_sa_tag_from_sam_tags_s5(.x)))
@@ -500,10 +499,10 @@ if (file.exists(realigned_softclip_origin_sam_file_s5) && file.info(realigned_so
   } else { print(paste("⚠️ Warning: Stage 3b realigned SAM has no data lines:", realigned_softclip_origin_sam_file_s5)) }
 } else { print(paste("⚠️ Warning: Stage 3b realigned SAM file not found/empty:", realigned_softclip_origin_sam_file_s5)) }
 
-original_sc_qnames_s5_df <- tibble() 
+original_sc_qnames_s5_df <- tibble()
 if(file.exists(original_softclip_info_tsv_s5) && file.info(original_softclip_info_tsv_s5)$size > 0){
-    original_sc_info_s5 <- read_tsv(original_softclip_info_tsv_s5, show_col_types = FALSE, col_types = cols(QNAME=col_character())) 
-    print(problems(original_sc_info_s5))
+    original_sc_info_s5 <- read_tsv(original_softclip_info_tsv_s5, show_col_types = FALSE, col_types = cols(QNAME=col_character()))
+    print(problems(original_sc_info_s5)) # Keep this to check for parsing issues
     if(nrow(original_sc_info_s5) > 0 && "QNAME" %in% names(original_sc_info_s5)){
         original_sc_qnames_s5_df <- tibble(ORIG_QNAME = unique(original_sc_info_s5$QNAME))
         print(paste("Loaded", nrow(original_sc_qnames_s5_df), "unique QNAMEs from Stage 3a TSV."))
@@ -512,10 +511,9 @@ if(file.exists(original_softclip_info_tsv_s5) && file.info(original_softclip_inf
 
 loaded_full_length_spanning_evidence_s5 <- tibble()
 if (file.exists(full_length_spanning_evidence_file_s5) && file.info(full_length_spanning_evidence_file_s5)$size > 0) {
-  loaded_full_length_spanning_evidence_s5 <- read_tsv(full_length_spanning_evidence_file_s5, show_col_types = FALSE) 
-  print(problems(loaded_full_length_spanning_evidence_s5)) 
- # Ensure QNAME column exists, renaming from 'read_name' if that's what Stage 4 produced
-  if(!("QNAME" %in% names(loaded_full_length_spanning_evidence_s5)) && ("read_name" %in% names(loaded_full_length_spanning_evidence_s5))){ 
+  loaded_full_length_spanning_evidence_s5 <- read_tsv(full_length_spanning_evidence_file_s5, show_col_types = FALSE)
+  print(problems(loaded_full_length_spanning_evidence_s5)) # Keep this to check for parsing issues
+  if(!("QNAME" %in% names(loaded_full_length_spanning_evidence_s5)) && ("read_name" %in% names(loaded_full_length_spanning_evidence_s5))){
       loaded_full_length_spanning_evidence_s5 <- loaded_full_length_spanning_evidence_s5 %>% rename(QNAME = read_name)
   }
   print(paste("Loaded", nrow(loaded_full_length_spanning_evidence_s5), "records from Stage 4 full-length spanning output."))
@@ -535,9 +533,9 @@ if(nrow(loaded_realigned_sc_sam_s5) > 0 && nrow(original_sc_qnames_s5_df) > 0) {
 }
 
 for (idx in 1:nrow(fusion_input)) {
-  current_fusion <- fusion_input[idx, ]; fusion_id_val <- current_fusion$fusion_id; sample_id_val <- current_fusion$sample_id 
+  current_fusion <- fusion_input[idx, ]; fusion_id_val <- current_fusion$fusion_id; sample_id_val <- current_fusion$sample_id
   fp_gene <- current_fusion[["fiveprime_gene"]]; tp_gene <- current_fusion[["threeprime_gene"]]
-  fp_chr <- current_fusion$fiveprime_chr; fp_start_win <- current_fusion$fiveprime_search_start - search_window_s5; fp_end_win <- current_fusion$fiveprime_search_end + search_window_s5 
+  fp_chr <- current_fusion$fiveprime_chr; fp_start_win <- current_fusion$fiveprime_search_start - search_window_s5; fp_end_win <- current_fusion$fiveprime_search_end + search_window_s5
   tp_chr <- current_fusion$threeprime_chr; tp_start_win <- current_fusion$threeprime_search_start - search_window_s5; tp_end_win <- current_fusion$threeprime_search_end + search_window_s5
   num_supp_reads <- 0; qnames_supp <- character(0); avg_mapq_supp <- NA_real_
   num_realigned_sc_reads <- 0; qnames_realigned_sc <- character(0); avg_mapq_realigned_sc <- NA_real_
@@ -545,14 +543,18 @@ for (idx in 1:nrow(fusion_input)) {
 
   # --- 1. Process Supplementary Alignment Evidence ---
   if (nrow(loaded_supp_align_evidence_s5) > 0 && "fusion_id" %in% names(loaded_supp_align_evidence_s5)) {
+    # Pre-filter supplementary alignments for the current fusion (OPTIONAL but good practice if loaded_supp_align_evidence_s5 is huge)
+    # This step is slightly different because loaded_supp_align_evidence_s5 already has fusion_id.
     sa_for_this_fusion <- loaded_supp_align_evidence_s5 %>% filter(fusion_id == fusion_id_val)
+    
+    # The rest of the supplementary processing remains the same...
     if(nrow(sa_for_this_fusion) > 0 && "SA_DETAILS_PARSED" %in% names(sa_for_this_fusion)){
         qname_sa_summary <- sa_for_this_fusion %>%
-            filter(!is.na(MAPQ) & MAPQ >= min_mapq_s5) %>% 
+            filter(!is.na(MAPQ) & MAPQ >= min_mapq_s5) %>%
             group_by(QNAME) %>%
             summarise(
-                has_sa_near_5p = any(!is.na(RNAME)&RNAME==fp_chr & !is.na(POS)&POS>=fp_start_win&POS<=fp_end_win, na.rm=TRUE), 
-                has_sa_near_3p = any(!is.na(RNAME)&RNAME==tp_chr & !is.na(POS)&POS>=tp_start_win&POS<=tp_end_win, na.rm=TRUE), 
+                has_sa_near_5p = any(!is.na(RNAME)&RNAME==fp_chr & !is.na(POS)&POS>=fp_start_win&POS<=fp_end_win, na.rm=TRUE),
+                has_sa_near_3p = any(!is.na(RNAME)&RNAME==tp_chr & !is.na(POS)&POS>=tp_start_win&POS<=tp_end_win, na.rm=TRUE),
                 sa_tag_points_to_5p_calc = any(sapply(SA_DETAILS_PARSED, function(sa_df) {
                     if(nrow(sa_df) > 0 && "sa_rname" %in% names(sa_df)) {
                         any(sa_df$sa_rname == fp_chr & !is.na(sa_df$sa_pos) & sa_df$sa_pos >= fp_start_win & sa_df$sa_pos <= fp_end_win & !is.na(sa_df$sa_mapq) & sa_df$sa_mapq >= min_mapq_s5, na.rm = TRUE)
@@ -563,7 +565,7 @@ for (idx in 1:nrow(fusion_input)) {
                         any(sa_df$sa_rname == tp_chr & !is.na(sa_df$sa_pos) & sa_df$sa_pos >= tp_start_win & sa_df$sa_pos <= tp_end_win & !is.na(sa_df$sa_mapq) & sa_df$sa_mapq >= min_mapq_s5, na.rm = TRUE)
                     } else { FALSE }
                 })),
-                mapq_scores_of_relevant_sa_segments = list(MAPQ[ 
+                mapq_scores_of_relevant_sa_segments = list(MAPQ[
                     (!is.na(RNAME)&RNAME==fp_chr & !is.na(POS)&POS>=fp_start_win&POS<=fp_end_win) |
                     (!is.na(RNAME)&RNAME==tp_chr & !is.na(POS)&POS>=tp_start_win&POS<=tp_end_win)
                 ]),
@@ -571,7 +573,7 @@ for (idx in 1:nrow(fusion_input)) {
             ) %>%
             filter( (has_sa_near_5p & (has_sa_near_3p | sa_tag_points_to_3p_calc)) |
                     (has_sa_near_3p & (has_sa_near_5p | sa_tag_points_to_5p_calc)) )
-            
+
         num_supp_reads <- nrow(qname_sa_summary)
         if(num_supp_reads > 0) {
            qnames_supp <- qname_sa_summary %>% pull(QNAME)
@@ -584,11 +586,59 @@ for (idx in 1:nrow(fusion_input)) {
 
   # --- 2. Process Realigned Soft-Clip Origin Read Evidence ---
   if (nrow(realigned_sc_sam_filtered_once_s5) > 0 && "SA_DETAILS_PARSED" %in% names(realigned_sc_sam_filtered_once_s5)) {
-    realigned_reads_to_check <- realigned_sc_sam_filtered_once_s5 # Already filtered by original QNAME
+
+    # ====================================================================================
+    # START OF PRE-FILTERING LOGIC FOR REALIGNED SOFT-CLIP EVIDENCE
+    # ====================================================================================
+    message(glue("   Pre-filtering realigned reads for fusion_id: {fusion_id_val} ({fp_gene} --- {tp_gene}). Initial set: {nrow(realigned_sc_sam_filtered_once_s5)} reads."))
     
-    if(nrow(realigned_reads_to_check) > 0){
+    # Create a temporary logical vector for filtering to handle potential NA from sapply if SA_DETAILS_PARSED is missing for a row
+    # This ensures that filter() gets a logical vector of the correct length.
+    
+    # First, create logical vectors for primary alignment hits
+    primary_hits_5p_vec <- (!is.na(realigned_sc_sam_filtered_once_s5$RNAME) & realigned_sc_sam_filtered_once_s5$RNAME == fp_chr & 
+                           !is.na(realigned_sc_sam_filtered_once_s5$POS) & realigned_sc_sam_filtered_once_s5$POS >= fp_start_win & 
+                           realigned_sc_sam_filtered_once_s5$POS <= fp_end_win)
+    
+    primary_hits_3p_vec <- (!is.na(realigned_sc_sam_filtered_once_s5$RNAME) & realigned_sc_sam_filtered_once_s5$RNAME == tp_chr & 
+                           !is.na(realigned_sc_sam_filtered_once_s5$POS) & realigned_sc_sam_filtered_once_s5$POS >= tp_start_win & 
+                           realigned_sc_sam_filtered_once_s5$POS <= tp_end_win)
+
+    # Next, create a logical vector for SA tag hits
+    # Ensure SA_DETAILS_PARSED exists and is a list before applying sapply
+    sa_tag_hits_partner_vec <- rep(FALSE, nrow(realigned_sc_sam_filtered_once_s5)) # Default to FALSE
+    if(is.list(realigned_sc_sam_filtered_once_s5$SA_DETAILS_PARSED)) {
+        sa_tag_hits_partner_vec <- sapply(realigned_sc_sam_filtered_once_s5$SA_DETAILS_PARSED, function(sa_df_item) {
+            if(!is.null(sa_df_item) && nrow(sa_df_item) > 0 && "sa_rname" %in% names(sa_df_item)) {
+                any(
+                    (sa_df_item$sa_rname == fp_chr & !is.na(sa_df_item$sa_pos) & sa_df_item$sa_pos >= fp_start_win & sa_df_item$sa_pos <= fp_end_win & !is.na(sa_df_item$sa_mapq) & sa_df_item$sa_mapq >= min_mapq_s5) |
+                    (sa_df_item$sa_rname == tp_chr & !is.na(sa_df_item$sa_pos) & sa_df_item$sa_pos >= tp_start_win & sa_df_item$sa_pos <= tp_end_win & !is.na(sa_df_item$sa_mapq) & sa_df_item$sa_mapq >= min_mapq_s5),
+                    na.rm = TRUE
+                )
+            } else {
+                FALSE
+            }
+        })
+    }
+    # Ensure sa_tag_hits_partner_vec has the correct length and handles cases where SA_DETAILS_PARSED might be NULL for some rows
+    if(length(sa_tag_hits_partner_vec) != nrow(realigned_sc_sam_filtered_once_s5)) {
+        message(glue("Warning: Length mismatch in sa_tag_hits_partner_vec for fusion {fusion_id_val}. Defaulting to no SA hits for pre-filter."))
+        sa_tag_hits_partner_vec <- rep(FALSE, nrow(realigned_sc_sam_filtered_once_s5))
+    }
+
+
+    realigned_reads_to_check <- realigned_sc_sam_filtered_once_s5[
+      primary_hits_5p_vec | primary_hits_3p_vec | sa_tag_hits_partner_vec, 
+    ]
+    
+    message(glue("   After pre-filtering: {nrow(realigned_reads_to_check)} reads to check for this fusion."))
+    # ====================================================================================
+    # END OF PRE-FILTERING LOGIC
+    # ====================================================================================
+    
+    if(nrow(realigned_reads_to_check) > 0){ # Check if any reads remain after pre-filtering
         qname_realigned_summary <- realigned_reads_to_check %>%
-            group_by(ORIG_QNAME) %>% 
+            group_by(ORIG_QNAME) %>%
             summarise(
                 realigned_aln_hits_5p = any(!is.na(RNAME)&RNAME==fp_chr & !is.na(POS)&POS>=fp_start_win&POS<=fp_end_win, na.rm=TRUE),
                 realigned_aln_hits_3p = any(!is.na(RNAME)&RNAME==tp_chr & !is.na(POS)&POS>=tp_start_win&POS<=tp_end_win, na.rm=TRUE),
@@ -602,7 +652,7 @@ for (idx in 1:nrow(fusion_input)) {
                         any(sa_df$sa_rname == tp_chr & !is.na(sa_df$sa_pos) & sa_df$sa_pos >= tp_start_win & sa_df$sa_pos <= tp_end_win & !is.na(sa_df$sa_mapq) & sa_df$sa_mapq >= min_mapq_s5, na.rm = TRUE)
                     } else { FALSE }
                 })),
-                mapq_scores_of_realigned_segments = list(MAPQ[!is.na(MAPQ)]),
+                mapq_scores_of_realigned_segments = list(MAPQ[!is.na(MAPQ)]), # MAPQ from the primary alignment of the realigned read
                 .groups = 'drop'
             ) %>%
             filter( (realigned_aln_hits_5p & (realigned_aln_hits_3p | sa_tag_points_to_3p_realigned_calc)) |
@@ -618,23 +668,23 @@ for (idx in 1:nrow(fusion_input)) {
   }
 
   # --- 3. Process Full-Length Spanning Reads ---
+  # ... (rest of Stage 5 remains the same) ...
   if (nrow(loaded_full_length_spanning_evidence_s5) > 0 && "fusion_id" %in% names(loaded_full_length_spanning_evidence_s5)) {
-    # Ensure QNAME column exists for filtering
     if ("QNAME" %in% names(loaded_full_length_spanning_evidence_s5)) {
         full_length_spanning_for_fusion <- loaded_full_length_spanning_evidence_s5 %>% filter(fusion_id == fusion_id_val)
-        num_full_length_spanning_s4 <- nrow(full_length_spanning_for_fusion) 
+        num_full_length_spanning_s4 <- nrow(full_length_spanning_for_fusion)
         if (num_full_length_spanning_s4 > 0) qnames_full_length_spanning_s4 <- full_length_spanning_for_fusion %>% distinct(QNAME) %>% pull(QNAME)
     } else {
         message("⚠️ Warning: QNAME column missing in loaded Stage 4 data for fusion_id: ", fusion_id_val)
     }
   }
   
-  all_supporting_qnames <- unique(c(qnames_supp, qnames_realigned_sc, qnames_full_length_spanning_s4)) 
+  all_supporting_qnames <- unique(c(qnames_supp, qnames_realigned_sc, qnames_full_length_spanning_s4))
   total_unique_reads <- length(all_supporting_qnames)
   evidence_cats <- c()
   if (num_supp_reads > 0) evidence_cats <- c(evidence_cats, "Supplementary")
   if (num_realigned_sc_reads > 0) evidence_cats <- c(evidence_cats, "RealignedSoftClipOrigin")
-  if (num_full_length_spanning_s4 > 0) evidence_cats <- c(evidence_cats, "FullLengthSpanning_S4") 
+  if (num_full_length_spanning_s4 > 0) evidence_cats <- c(evidence_cats, "FullLengthSpanning_S4")
   is_validated <- total_unique_reads > 0
   
   validation_summary_list_s5[[length(validation_summary_list_s5) + 1]] <- tibble(
@@ -643,11 +693,11 @@ for (idx in 1:nrow(fusion_input)) {
     threeprime_locus = paste0(tp_chr, ":", current_fusion$threeprime_search_start, "-", current_fusion$threeprime_search_end),
     num_supplementary_reads = num_supp_reads, avg_mapq_supplementary = round(avg_mapq_supp, 2),
     num_realigned_softclip_origin_reads = num_realigned_sc_reads, avg_mapq_realigned_sc = round(avg_mapq_realigned_sc, 2),
-    num_full_length_spanning_reads_S4 = num_full_length_spanning_s4, 
+    num_full_length_spanning_reads_S4 = num_full_length_spanning_s4,
     total_unique_supporting_reads = total_unique_reads, evidence_types = paste(evidence_cats, collapse = "; "),
     is_validated_by_pipeline = is_validated
   )
-} 
+}
 
 if (length(validation_summary_list_s5) > 0) {
   final_df_s5 <- bind_rows(validation_summary_list_s5)
@@ -656,9 +706,7 @@ if (length(validation_summary_list_s5) > 0) {
   print(paste("Total fusions validated by at least one evidence type in Stage 5:", sum(final_df_s5$is_validated_by_pipeline, na.rm=TRUE)))
 } else {
   print("⚠️ No fusion candidates processed in Stage 5 or no evidence found. Final validation table not generated.")
-  write_tsv(tibble(), final_summary_table_path_s5) 
+  write_tsv(tibble(), final_summary_table_path_s5)
 }
 
 print("🎉🎉🎉 Full pipeline (Consolidated & Revised) completed successfully! 🎉🎉🎉")
-
-
