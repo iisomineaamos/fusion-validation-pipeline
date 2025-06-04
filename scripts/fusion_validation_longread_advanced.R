@@ -687,16 +687,33 @@ for (idx in 1:nrow(fusion_input)) {
   if (num_full_length_spanning_s4 > 0) evidence_cats <- c(evidence_cats, "FullLengthSpanning_S4")
   is_validated <- total_unique_reads > 0
   
+
   validation_summary_list_s5[[length(validation_summary_list_s5) + 1]] <- tibble(
-    fusion_id = fusion_id_val, sample_id = sample_id_val, fiveprime_gene = fp_gene, threeprime_gene = tp_gene,
-    fiveprime_locus = paste0(fp_chr, ":", current_fusion$fiveprime_search_start, "-", current_fusion$fiveprime_search_end),
-    threeprime_locus = paste0(tp_chr, ":", current_fusion$threeprime_search_start, "-", current_fusion$threeprime_search_end),
-    num_supplementary_reads = num_supp_reads, avg_mapq_supplementary = round(avg_mapq_supp, 2),
-    num_realigned_softclip_origin_reads = num_realigned_sc_reads, avg_mapq_realigned_sc = round(avg_mapq_realigned_sc, 2),
-    num_full_length_spanning_reads_S4 = num_full_length_spanning_s4,
-    total_unique_supporting_reads = total_unique_reads, evidence_types = paste(evidence_cats, collapse = "; "),
+    fusion_id = fusion_id_val, 
+    sample_id = sample_id_val, 
+    fiveprime_gene = fp_gene, 
+    threeprime_gene = tp_gene,
+    # ADDING NEW COLUMNS HERE:
+    fiveprime_chr = fp_chr, # fp_chr is current_fusion$fiveprime_chr
+    fiveprime_junction = current_fusion$fiveprime_junction, # Assuming this column exists in current_fusion
+    fiveprime_strand = current_fusion$fiveprime_strand,     # Assuming this column exists in current_fusion
+    threeprime_chr = tp_chr, # tp_chr is current_fusion$threeprime_chr
+    threeprime_junction = current_fusion$threeprime_junction, # Assuming this column exists in current_fusion
+    threeprime_strand = current_fusion$threeprime_strand,   # Assuming this column exists in current_fusion
+    # End of new columns
+    fiveprime_locus = paste0(fp_chr, ":", current_fusion$fiveprime_search_start, "-", current_fusion$fiveprime_search_end), # Keeping this for context
+    threeprime_locus = paste0(tp_chr, ":", current_fusion$threeprime_search_start, "-", current_fusion$threeprime_search_end), # Keeping this for context
+    num_supplementary_reads = num_supp_reads, 
+    avg_mapq_supplementary = round(avg_mapq_supp, 2),
+    num_realigned_softclip_origin_reads = num_realigned_sc_reads, 
+    avg_mapq_realigned_sc = round(avg_mapq_realigned_sc, 2),
+    num_full_length_spanning_reads_S4 = num_full_length_spanning_s4, 
+    total_unique_supporting_reads = total_unique_reads, 
+    evidence_types = paste(evidence_cats, collapse = "; "),
     is_validated_by_pipeline = is_validated
+    # Potentially other columns here
   )
+
 }
 
 if (length(validation_summary_list_s5) > 0) {
