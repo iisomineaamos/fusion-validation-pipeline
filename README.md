@@ -1,4 +1,4 @@
-# fusion-validation-pipeline
+# Transcript-Centric Gene Fusion Validation Pipeline.
 =======
 Long-Read Fusion Validation Pipeline
 A modular R-based pipeline for validating gene fusions in long-read RNA-seq datasets using supplementary alignments, split-reads, soft-clipped re-alignment, and full-length fusion spanning detection.
