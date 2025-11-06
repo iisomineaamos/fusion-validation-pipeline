@@ -32,9 +32,10 @@ cd fusion-validation-pipeline
 
 # Build the container (requires sudo/root privileges)
 sudo singularity build singularity/fusion_pipeline.sif singularity/fusion_pipeline.def
+
 This will create a single container file named fusion_pipeline.sif inside the singularity/ directory.
 
-2. Run the Pipeline
+### 2. Run the Pipeline
 
 To run the pipeline, use the singularity exec command. You must use the --bind (-B) flag to mount your data directory (containing BAMs, FASTA, etc.) and your code directory (this repository) into the container's environment.
 # --- 1. Define your paths ---
@@ -44,8 +45,6 @@ DATA_DIR=/path/to/your/data
 
 # (e.g., /home/user/code/fusion-validation-pipeline)
 PIPELINE_REPO_DIR=/path/to/where/you/cloned/this/repo
-
-# --- 2. Run the pipeline ---
 
 singularity exec \
     -B ${DATA_DIR}:/data \
